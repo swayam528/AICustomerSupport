@@ -4,56 +4,80 @@ import { Box, Button, Stack, TextField } from '@mui/material'
 import { useState, useRef, useEffect } from 'react'
 
 export default function Home() {
-  const [messages, setMessages] = useState([
-    {
-      role: 'assistant',
-      content: "Hi! I'm the FinBot Customer Support Assistant. How can I help you today?",
-    },
-  ])
+  const [messages, setMessages] = useState([])
+
   const [message, setMessage] = useState('')
   const [isLoading, setIsLoading] = useState(false)
 
-  const sendMessage = async () => {
-    if (!message.trim()) return;  // Don't send empty messages
-    
+ const sendMessage = async () => {
+  if (!message.trim()) return; // Don't send empty messages
+
+  setIsLoading(true); // Start loading
+  setMessages((messages) => [
+    ...messages,
+    { role: 'user', content: message },
+    { role: 'assistant', content: '' },
+  ]);
+
+  try {
+    const response = await fetch('/api/chat', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify([...messages, { role: 'user', content: message }]),
+    });
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+
+    let result = '';
+    await reader.read().then(function processText({ done, value }) {
+      if (done) return;
+
+      const text = decoder.decode(value || new Int8Array(), { stream: true });
+      result += text;
+      setMessages((messages) => {
+        let lastMessage = messages[messages.length - 1];
+        let otherMessages = messages.slice(0, messages.length - 1);
+        return [
+          ...otherMessages,
+          { ...lastMessage, content: lastMessage.content + text },
+        ];
+      });
+      return reader.read().then(processText);
+    });
+
+    // Process the result as needed
+    console.log("Processed response:", result);
+
+    // Update the last message with the final result
+    setMessages((messages) => {
+      let lastMessage = messages[messages.length - 1];
+      let otherMessages = messages.slice(0, messages.length - 1);
+      return [
+        ...otherMessages,
+        { ...lastMessage, content: result },
+      ];
+    });
+
+  } catch (error) {
+    console.error('Error:', error);
     setMessages((messages) => [
       ...messages,
-      { role: 'user', content: message },
-      { role: 'assistant', content: '' },
-    ])
-    
-    const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify([...messages, { role: 'user', content: message }]),
-      }).then(async (res) =>{
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder()
-  
-      let result = ''
-      return reader.read().then(function processText({done, value}){
-        if(done){
-          return result;
-        }
-        const text = decoder.decode(value || new Int8Array(), {stream: true})
-        setMessages((messages) => {
-          let lastMessage = messages[messages.length - 1]
-          let otherMessages = messages.slice(0, messages.length - 1)
-          return [
-            ...otherMessages,
-            { ...lastMessage, content: lastMessage.content + text },
-          ]
-        })
-        return reader.read().then(processText)
-      })
-    })
+      { role: 'assistant', content: 'Sorry, something went wrong. Please try again.' },
+    ]);
+  } finally {
+    setIsLoading(false); // Stop loading
+    setMessage(''); // Clear input
   }
+}
+
+
 
   const messagesEndRef = useRef(null)
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }
 
   useEffect(() => {

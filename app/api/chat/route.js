@@ -1,8 +1,29 @@
-import {NextResponse} from 'next/server' // Import NextResponse from Next.js for handling responses
-import OpenAI from 'openai' // Import OpenAI library for interacting with the OpenAI API
+import { NextResponse } from 'next/server';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
-// System prompt for the AI, providing guidelines on how to respond to users and how it is supposed to behave
-const systemPrompt = `You are FinBot, an intelligent virtual assistant designed to assist users with their banking needs. Your primary goal is to provide accurate information, handle inquiries, and facilitate a smooth banking experience. Ensure that all interactions are secure, professional, and tailored to the user's needs.
+const apiKey = process.env.GEMINI_API_KEY;
+const genAI = new GoogleGenerativeAI(apiKey);
+
+const model = genAI.getGenerativeModel({
+  model: "gemini-1.5-flash",
+});
+
+const generationConfig = {
+  temperature: 1,
+  topP: 0.95,
+  topK: 64,
+  maxOutputTokens: 8192,
+  responseMimeType: "text/plain",
+};
+
+export async function POST(req) {
+  try {
+    const data = await req.json();
+
+    const chatHistory = [
+      {
+        role: "system", 
+        parts: [{ text: `You are FinBot, an intelligent virtual assistant designed to assist users with their banking needs. Your primary goal is to provide accurate information, handle inquiries, and facilitate a smooth banking experience. Ensure that all interactions are secure, professional, and tailored to the user's needs.
 
 Objectives:
 Customer Support: Address common banking queries, such as account balances, transaction history, loan inquiries, and account management.
@@ -23,40 +44,45 @@ Issue Resolution: Help users resolve issues related to their accounts, such as r
 Service Recommendations: Based on user needs, suggest suitable banking products or services and guide them on how to apply.
 Security Measures:
 Authentication: Implement multi-factor authentication for sensitive transactions and account changes.
-Data Protection: Ensure all personal and financial information is handled according to privacy regulations and best practices.`
+Data Protection: Ensure all personal and financial information is handled according to privacy regulations and best practices.` }],
+      },
+      ...data.map((message) => ({
+        role: message.role === 'assistant' ? 'model' : message.role,
+        parts: [{ text: message.content }],
+      })),
+    ];
 
-// POST function to handle incoming requests
-export async function POST(req) {
-  const openai = new OpenAI() // Create a new instance of the OpenAI client
-  const data = await req.json() // Parse the JSON body of the incoming request
+    // Ensure the first message is from the user
+    if (chatHistory[0].role !== 'user') {
+      chatHistory.shift(); // Remove the system message if it's the first message
+    }
 
-  // Create a chat completion request to the OpenAI API
-  const completion = await openai.chat.completions.create({
-    messages: [{role: 'system', content: systemPrompt}, ...data], // Include the system prompt and user messages
-    model: 'gpt-4o-mini', // Specify the model to use
-    stream: true, // Enable streaming responses
-  })
+    const chatSession = model.startChat({
+      generationConfig,
+      history: chatHistory,
+    });
 
-  // Create a ReadableStream to handle the streaming response
-  const stream = new ReadableStream({
-    async start(controller) {
-      const encoder = new TextEncoder() // Create a TextEncoder to convert strings to Uint8Array
-      try {
-        // Iterate over the streamed chunks of the response
-        for await (const chunk of completion) {
-          const content = chunk.choices[0]?.delta?.content // Extract the content from the chunk
-          if (content) {
-            const text = encoder.encode(content) // Encode the content to Uint8Array
-            controller.enqueue(text) // Enqueue the encoded text to the stream
-          }
+    const result = await chatSession.sendMessage(data[data.length - 1].content);
+
+    const stream = new ReadableStream({
+      async start(controller) {
+        const encoder = new TextEncoder();
+        try {
+          const text = result.response.text;
+          const encodedText = encoder.encode(text);
+          controller.enqueue(encodedText);
+        } catch (error) {
+          console.error('Error processing chat response:', error);
+          controller.error(error);
+        } finally {
+          controller.close();
         }
-      } catch (err) {
-        controller.error(err) // Handle any errors that occur during streaming
-      } finally {
-        controller.close() // Close the stream when done
-      }
-    },
-  })
+      },
+    });
 
-  return new NextResponse(stream) // Return the stream as the response
+    return new NextResponse(stream);
+  } catch (error) {
+    console.error('Error handling the request:', error);
+    return new NextResponse('Internal Server Error', { status: 500 });
+  }
 }
